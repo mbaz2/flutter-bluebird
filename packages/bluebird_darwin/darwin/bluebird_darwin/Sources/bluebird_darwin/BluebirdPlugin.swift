@@ -53,6 +53,9 @@ public class BluebirdPlugin: NSObject, FlutterPlugin {
   /// random error code defined by bluebird for adapter-off
   /// disconnections
   static let adapterOffDisconnectCode: Int64 = 1573878
+  /// random error code defined by bluebird for a connection attempt
+  /// that reached its deadline
+  static let connectTimeoutErrorCode: Int64 = 8291447
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     #if os(macOS)
@@ -220,9 +223,12 @@ public class BluebirdPlugin: NSObject, FlutterPlugin {
   }
 
   /// Occupies the device's connect slot, runs `start`, then suspends until a
-  /// delegate callback resumes the operation. Same contract as `awaitGatt`.
+  /// delegate callback resumes the operation or `timeout` elapses (CoreBluetooth
+  /// never gives up on a connect by itself). Same contract as `awaitGatt`.
   @MainActor
-  func awaitConnect(_ state: PeripheralState, start: () throws -> Void) async throws {
+  func awaitConnect(_ state: PeripheralState, timeout: TimeInterval, start: () throws -> Void)
+    async throws
+  {
     try await withCheckedThrowingContinuation {
       (continuation: CheckedContinuation<Void, Error>) in
       guard state.pendingConnect == nil else {
@@ -231,12 +237,45 @@ public class BluebirdPlugin: NSObject, FlutterPlugin {
       }
       state.pendingConnect = continuation
 
+      // .common: the default mode does not fire while a touch is being tracked
+      let watchdog = Timer(timeInterval: timeout, repeats: false) { [weak self] _ in
+        self?.connectTimedOut(state)
+      }
+      RunLoop.main.add(watchdog, forMode: .common)
+      state.connectWatchdog = watchdog
+
       do {
         try start()
       } catch {
         state.takeConnect()?.resume(throwing: error)
       }
     }
+  }
+
+  /// Abandons a connect at its deadline the way an explicit `disconnect` would.
+  private func connectTimedOut(_ state: PeripheralState) {
+    guard state.pendingConnect != nil else { return }
+
+    let address = state.peripheral.identifier.uuidString
+    log(.error, "connect: timed out (\(address))")
+
+    if state.connection == .connecting {
+      peripherals.removeValue(forKey: address)
+    }
+    centralManager?.cancelPeripheralConnection(state.peripheral)
+
+    // canceling a pending connection does not reliably invoke
+    // didDisconnectPeripheral, so complete everything here
+    state.takeConnect()?.resume(
+      throwing: PigeonError(
+        code: BluebirdErrorCode.timeout.wire, message: "connection timed out", details: nil))
+
+    sink?.success(
+      BmConnectionStateEvent(
+        address: address,
+        connectionState: .disconnected,
+        disconnectReasonCode: Self.connectTimeoutErrorCode,
+        disconnectReasonString: "connection timed out"))
   }
 
   /// Occupies the device's disconnect slot, runs `start`, then suspends until

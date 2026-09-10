@@ -173,7 +173,7 @@ class BluetoothDevice implements BluebirdLoggable {
                 throw BluebirdException("connect", BluebirdErrorCode.userCanceled, "connection canceled");
               }
               attempt.dispatched = true;
-              return p.connect(remoteId);
+              return p.connect(remoteId, timeout);
             },
             ensureAdapterIsOn: true,
             timeout: timeout,

@@ -83,7 +83,7 @@ abstract base class BluebirdPlatform {
 
   Future<void> clearGattCache(String address) => throw UnimplementedError('$runtimeType.clearGattCache');
 
-  Future<void> connect(String address) => throw UnimplementedError('$runtimeType.connect');
+  Future<void> connect(String address, Duration timeout) => throw UnimplementedError('$runtimeType.connect');
 
   Future<bool> createBond(String address, Uint8List? pin) => throw UnimplementedError('$runtimeType.createBond');
 

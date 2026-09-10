@@ -21,7 +21,8 @@ final class BluebirdAndroid extends BluebirdPlatform {
   Future<void> clearGattCache(String address) => _call('clearGattCache', () => _api.clearGattCache(address));
 
   @override
-  Future<void> connect(String address) => _call('connect', () => _api.connect(address));
+  Future<void> connect(String address, Duration timeout) =>
+      _call('connect', () => _api.connect(address, timeout.inMilliseconds));
 
   @override
   Future<bool> createBond(String address, Uint8List? pin) => _call('createBond', () => _api.createBond(address, pin));

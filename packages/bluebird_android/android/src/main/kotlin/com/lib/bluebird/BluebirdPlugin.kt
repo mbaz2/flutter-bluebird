@@ -669,7 +669,12 @@ class BluebirdPlugin :
         bonded.map { Proto.bmBluetoothDevice(it) }
     }
 
-    override fun connect(address: String, callback: (Result<Unit>) -> Unit) = launch("connect", callback) {
+    // timeoutMs is unused: connectGatt bounds itself, and the Dart side cancels shorter deadlines
+    override fun connect(
+        address: String,
+        timeoutMs: Long,
+        callback: (Result<Unit>) -> Unit,
+    ) = launch("connect", callback) {
         val a = requireAdapter()
         requirePermissions(connectPermissions()) { perm -> "Permission $perm required for new connection" }
 

@@ -1929,14 +1929,16 @@ class BluebirdHostApi {
     return (pigeonVar_replyValue! as List<Object?>).cast<BmBluetoothDevice>();
   }
 
-  Future<void> connect(String address) async {
+  /// Fails with `timeout` after [timeoutMs] on platforms whose connect never
+  /// gives up on its own (darwin); the Dart side applies the same deadline.
+  Future<void> connect(String address, int timeoutMs) async {
     final pigeonVar_channelName = 'dev.flutter.pigeon.bluebird.BluebirdHostApi.connect$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[address]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[address, timeoutMs]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     _extractReplyValueOrThrow(pigeonVar_replyList, pigeonVar_channelName, isNullValid: true);
