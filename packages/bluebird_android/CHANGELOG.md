@@ -1,7 +1,10 @@
 ## Unreleased
 
+- Fixed a permission request that Android interrupts — reported with empty results, e.g. when the dialog is dismissed by the system — leaving the operation that asked suspended forever. `startScan` was the usual victim: it never returned, the scan guard stayed set, and every later scan failed with `operationInProgress` for the life of the process. Such a request now fails with `permissionDenied`.
+- `connect` accepts the caller's timeout and does nothing with it: `connectGatt(autoConnect = false)` bounds itself, and a shorter deadline is enforced by the Dart side cancelling through `disconnect`.
 - `getAdapterState` and the adapter-state events overlay the scan permission: a radio that is on with the permission refused reads `unauthorized`, re-evaluated on a permission result and on activity resume. Never-asked reads as the radio alone.
 - `startScan` fails with `locationDisabled` when the system location toggle is off on Android 11 and below, where a scan would otherwise return nothing at all.
+
 
 ## 0.4.3
 
@@ -27,4 +30,5 @@
 ## 0.1.0
 
 - Initial release.
+
 
