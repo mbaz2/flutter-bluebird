@@ -79,18 +79,20 @@ class Permissions {
         permissions: Array<out String>,
         grantResults: IntArray,
     ): Boolean {
-        val operation = operations.remove(requestCode) // also cleans up to prevent leaks
+        val operation = operations.remove(requestCode) ?: return false // also cleans up to prevent leaks
 
-        if (operation != null && grantResults.isNotEmpty()) {
-            for (i in grantResults.indices) {
-                if (grantResults[i] != PackageManager.PERMISSION_GRANTED) {
-                    operation(false, permissions[i]) // permission denied
-                    return true
-                }
-            }
-            operation(true, null) // permission granted
+        // empty results mean the request was interrupted; the operation must still complete
+        if (grantResults.isEmpty()) {
+            operation(false, permissions.firstOrNull())
             return true
         }
-        return false
+        for (i in grantResults.indices) {
+            if (grantResults[i] != PackageManager.PERMISSION_GRANTED) {
+                operation(false, permissions[i]) // permission denied
+                return true
+            }
+        }
+        operation(true, null) // permission granted
+        return true
     }
 }
