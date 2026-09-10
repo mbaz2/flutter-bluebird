@@ -1771,7 +1771,9 @@ protocol BluebirdHostApi {
   func stopScan() throws
   func getSystemDevices(withServices: [String], completion: @escaping (Result<[BmBluetoothDevice], Error>) -> Void)
   func getBondedDevices(completion: @escaping (Result<[BmBluetoothDevice], Error>) -> Void)
-  func connect(address: String, completion: @escaping (Result<Void, Error>) -> Void)
+  /// Fails with `timeout` after [timeoutMs] on platforms whose connect never
+  /// gives up on its own (darwin); the Dart side applies the same deadline.
+  func connect(address: String, timeoutMs: Int64, completion: @escaping (Result<Void, Error>) -> Void)
   func disconnect(address: String, completion: @escaping (Result<Void, Error>) -> Void)
   func discoverServices(address: String, completion: @escaping (Result<[BmBluetoothService], Error>) -> Void)
   func readCharacteristic(address: String, characteristic: BmCharacteristicRef, completion: @escaping (Result<FlutterStandardTypedData, Error>) -> Void)
@@ -1993,12 +1995,15 @@ class BluebirdHostApiSetup {
     } else {
       getBondedDevicesChannel.setMessageHandler(nil)
     }
+    /// Fails with `timeout` after [timeoutMs] on platforms whose connect never
+    /// gives up on its own (darwin); the Dart side applies the same deadline.
     let connectChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.bluebird.BluebirdHostApi.connect\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       connectChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
         let addressArg = args[0] as! String
-        api.connect(address: addressArg) { result in
+        let timeoutMsArg = args[1] as! Int64
+        api.connect(address: addressArg, timeoutMs: timeoutMsArg) { result in
           switch result {
           case .success:
             reply(wrapResult(nil))

@@ -342,8 +342,10 @@ abstract class BluebirdHostApi {
   List<BmBluetoothDevice> getBondedDevices();
 
   // connection
+  /// Fails with `timeout` after [timeoutMs] on platforms whose connect never
+  /// gives up on its own (darwin); the Dart side applies the same deadline.
   @async
-  void connect(String address);
+  void connect(String address, int timeoutMs);
   @async
   void disconnect(String address);
   @async

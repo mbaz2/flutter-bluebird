@@ -161,7 +161,9 @@ extension BluebirdPlugin: BluebirdHostApi {
     }
   }
 
-  func connect(address: String, completion: @escaping (Result<Void, Error>) -> Void) {
+  func connect(
+    address: String, timeoutMs: Int64, completion: @escaping (Result<Void, Error>) -> Void
+  ) {
     launch(completion) { [self] in
       let central = ensureCentralManager()
 
@@ -208,7 +210,7 @@ extension BluebirdPlugin: BluebirdHostApi {
         peripherals[address] = state
       }
 
-      return try await awaitConnect(state) {
+      return try await awaitConnect(state, timeout: TimeInterval(timeoutMs) / 1000) {
         central.connect(state.peripheral, options: nil)
       }
     }

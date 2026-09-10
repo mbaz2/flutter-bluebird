@@ -1908,7 +1908,11 @@ interface BluebirdHostApi {
   fun stopScan()
   fun getSystemDevices(withServices: List<String>, callback: (Result<List<BmBluetoothDevice>>) -> Unit)
   fun getBondedDevices(callback: (Result<List<BmBluetoothDevice>>) -> Unit)
-  fun connect(address: String, callback: (Result<Unit>) -> Unit)
+  /**
+   * Fails with `timeout` after [timeoutMs] on platforms whose connect never
+   * gives up on its own (darwin); the Dart side applies the same deadline.
+   */
+  fun connect(address: String, timeoutMs: Long, callback: (Result<Unit>) -> Unit)
   fun disconnect(address: String, callback: (Result<Unit>) -> Unit)
   fun discoverServices(address: String, callback: (Result<List<BmBluetoothService>>) -> Unit)
   fun readCharacteristic(address: String, characteristic: BmCharacteristicRef, callback: (Result<ByteArray>) -> Unit)
@@ -2168,7 +2172,8 @@ interface BluebirdHostApi {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
             val addressArg = args[0] as String
-            api.connect(addressArg) { result: Result<Unit> ->
+            val timeoutMsArg = args[1] as Long
+            api.connect(addressArg, timeoutMsArg) { result: Result<Unit> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(MessagesPigeonUtils.wrapError(error))

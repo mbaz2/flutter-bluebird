@@ -54,7 +54,7 @@ final class FakePlatform extends BluebirdPlatform {
   Future<void> stopScan() => _run('stopScan', null);
 
   @override
-  Future<void> connect(String address) => _run('connect', null);
+  Future<void> connect(String address, Duration timeout) => _run('connect', null);
 
   @override
   Future<void> disconnect(String address) => _run('disconnect', null);

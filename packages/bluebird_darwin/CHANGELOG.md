@@ -1,3 +1,6 @@
+## Unreleased
+- `connect` now ends at the caller's timeout instead of never. CoreBluetooth never gives up on a connection attempt of its own accord, so a peripheral that is powered off or out of range left the call outstanding forever — and the device stuck in `connecting` with its slot occupied, which failed every later attempt with `operationInProgress`. At the deadline the connection is cancelled, the peripheral's state is torn down and the call fails with `timeout`, leaving the device retryable.
+
 ## 0.4.4
 
 - Fixed every non-`poweredOn` adapter state being reported as `adapterOff`. `unauthorized` now surfaces as `permissionDenied` and `unsupported` as `unsupported`, from `startScan`, `connect`, and the operations failed when the adapter goes away mid-flight.

@@ -173,7 +173,8 @@ final class BluebirdWeb extends BluebirdPlatform {
   }
 
   @override
-  Future<void> connect(String address) async {
+  Future<void> connect(String address, Duration timeout) async {
+    // `timeout` stays with the Dart side: Web Bluetooth cannot cancel a pending connect()
     final gatt = _gattForDevice(address);
     await gatt.connect().toDart;
 
