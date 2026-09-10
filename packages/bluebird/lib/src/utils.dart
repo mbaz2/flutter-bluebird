@@ -204,7 +204,6 @@ extension StreamNewStreamWithInitialValue<T> on Stream<T> {
 // this mutex lets a single task through at a time.
 class Mutex {
   static final global = Mutex();
-  static final disconnect = Mutex();
   static final platform = Mutex();
 
   final StreamController _controller = StreamController.broadcast();
