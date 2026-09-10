@@ -416,15 +416,12 @@ class Bluebird {
           if (!controller.isClosed) controller.close();
         });
       }
-      // Awaiting close on a controller that was never listened to hangs forever, so it
-      // lives with the listen rather than in the outer finally.
-      try {
-        yield* controller.stream;
-      } finally {
-        if (!controller.isClosed) await controller.close();
-      }
+      yield* controller.stream;
     } finally {
       timeoutTimer?.cancel();
+      // not awaited: the consumer is gone, and if it cancelled before the
+      // yield* the controller was never listened to and close() never completes
+      if (!controller.isClosed) unawaited(controller.close());
       await advertisements.cancel();
       await failures.cancel();
       await adapterOff.cancel();
