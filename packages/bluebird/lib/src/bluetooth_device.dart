@@ -21,6 +21,16 @@ import 'utils.dart';
 
 const int _mtuMax = 517;
 
+const Duration _cancelTimeout = Duration(seconds: 15);
+
+/// A connect in flight, so a [BluetoothDevice.disconnect] can cancel it whether
+/// or not it has reached the platform yet.
+class _ConnectAttempt {
+  bool dispatched = false;
+  bool cancelled = false;
+  final done = Completer<void>();
+}
+
 class BluetoothDevice implements BluebirdLoggable {
   final String remoteId;
 
@@ -47,6 +57,9 @@ class BluetoothDevice implements BluebirdLoggable {
   BluetoothBondState? _prevBondState;
 
   String? _platformName;
+
+  _ConnectAttempt? _connectAttempt;
+  Future<void>? _pendingDisconnect;
 
   final List<StreamSubscription> _subscriptions = [];
   final List<StreamSubscription> _delayedSubscriptions = [];
@@ -140,44 +153,57 @@ class BluetoothDevice implements BluebirdLoggable {
   ///   [mtu] Android only. Request a larger mtu right after connection, if set.
   Future<void> connect({Duration timeout = const Duration(seconds: 35), int? mtu = _mtuMax}) async {
     // make sure no one else is calling disconnect
-    await Mutex.disconnect.take();
-    bool disconnectReturned = false;
+    await _pendingDisconnect;
+    final attempt = _connectAttempt = _ConnectAttempt();
 
     // enter the `connecting` state up front (the platforms don't report it)
     _emitConnectionState(BluetoothConnectionState.connecting);
 
+    var timedOut = false;
     try {
       await Mutex.global.protect(() async {
         // record connection time
         if (System.isAndroid) _connectTimestamp = DateTime.now();
 
         try {
-          final future = Bluebird.invoke(
+          await Bluebird.invoke(
             "connect",
-            (p) => p.connect(remoteId),
+            (p) {
+              if (attempt.cancelled) {
+                throw BluebirdException("connect", BluebirdErrorCode.userCanceled, "connection canceled");
+              }
+              attempt.dispatched = true;
+              return p.connect(remoteId);
+            },
             ensureAdapterIsOn: true,
             timeout: timeout,
           );
-
-          // we return the disconnect mutex now so that this
-          // connection attempt can be canceled by calling disconnect
-          Mutex.disconnect.give();
-          disconnectReturned = true;
-
-          await future;
 
           // the connect future completing means we are connected; update state
           // here rather than waiting for the BmConnectionStateEvent, which
           // travels on a separate channel and may be processed after we return
           _connectionState = BluetoothConnectionState.connected;
         } on BluebirdException catch (e) {
-          if (e.code == BluebirdErrorCode.timeout) {
-            await Bluebird.invoke("disconnect", (p) => p.disconnect(remoteId));
-          }
+          timedOut = e.code == BluebirdErrorCode.timeout;
           rethrow;
         }
       });
     } catch (_) {
+      // the attempt is still in flight on the platform: cancel it, without
+      // masking the connect error
+      if (timedOut) {
+        try {
+          await Bluebird.invoke(
+            "disconnect",
+            (p) => p.disconnect(remoteId),
+            timeout: _cancelTimeout,
+            bypassQueue: true,
+          );
+        } catch (e) {
+          logger.warning("connect: failed to cancel the timed-out attempt: $e");
+        }
+      }
+
       // connect failed: the synthesized `connecting` never resolves on its own.
       // Android/darwin also emit a native disconnected event, but web does not —
       // so revert here (skipped if a native event already moved us on).
@@ -185,9 +211,10 @@ class BluetoothDevice implements BluebirdLoggable {
         _emitConnectionState(BluetoothConnectionState.disconnected);
       }
       rethrow;
+    } finally {
+      if (identical(_connectAttempt, attempt)) _connectAttempt = null;
+      attempt.done.complete();
     }
-
-    if (!disconnectReturned) Mutex.disconnect.give();
 
     // request larger mtu
     if (System.isAndroid && isConnected && mtu != null) {
@@ -209,30 +236,51 @@ class BluetoothDevice implements BluebirdLoggable {
     Duration timeout = const Duration(seconds: 35),
     bool queue = true,
     Duration androidDelay = const Duration(seconds: 2),
-  }) async {
-    // Only allow a single disconnect operation at a time
-    await Mutex.disconnect.protect(() {
-      Future<void> action() async {
-        // enter the `disconnecting` state (the platforms don't report it); the
-        // native `disconnected` event follows and moves us to disconnected
-        if (_connectionState != BluetoothConnectionState.disconnected) {
-          _emitConnectionState(BluetoothConnectionState.disconnecting);
-        }
+  }) {
+    // overlapping disconnects share the one in flight
+    return _pendingDisconnect ??= _disconnect(
+      timeout,
+      queue,
+      androidDelay,
+    ).whenComplete(() => _pendingDisconnect = null);
+  }
 
-        // Workaround Android race condition
-        await _ensureAndroidDisconnectionDelay(androidDelay);
+  Future<void> _disconnect(Duration timeout, bool queue, Duration androidDelay) async {
+    final attempt = _connectAttempt;
 
-        // invoke
-        await Bluebird.invoke("disconnect", (p) => p.disconnect(remoteId), ensureAdapterIsOn: true, timeout: timeout);
+    // a connect that has not reached the platform yet is cancelled before it does
+    if (!queue && attempt != null && !attempt.dispatched) {
+      attempt.cancelled = true;
+      await attempt.done.future;
+      if (_connectionState == BluetoothConnectionState.disconnected) return;
+    }
 
-        if (System.isAndroid) {
-          // Disconnected, remove connect timestamp
-          _connectTimestamp = null;
-        }
+    Future<void> action() async {
+      // enter the `disconnecting` state (the platforms don't report it); the
+      // native `disconnected` event follows and moves us to disconnected
+      if (_connectionState != BluetoothConnectionState.disconnected) {
+        _emitConnectionState(BluetoothConnectionState.disconnecting);
       }
 
-      return queue ? Mutex.global.protect(action) : action();
-    });
+      // Workaround Android race condition
+      await _ensureAndroidDisconnectionDelay(androidDelay);
+
+      // invoke
+      await Bluebird.invoke(
+        "disconnect",
+        (p) => p.disconnect(remoteId),
+        ensureAdapterIsOn: true,
+        timeout: timeout,
+        bypassQueue: !queue,
+      );
+
+      if (System.isAndroid) {
+        // Disconnected, remove connect timestamp
+        _connectTimestamp = null;
+      }
+    }
+
+    await (queue ? Mutex.global.protect(action) : action());
   }
 
   /// Discover services, characteristics, and descriptors of the remote device
