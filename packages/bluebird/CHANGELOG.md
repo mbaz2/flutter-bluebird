@@ -1,14 +1,7 @@
-## Unreleased
+## 0.5.0
 
-- Fixed a scan cancelled while `startScan` was still in flight hanging forever — and the cancel with it. The generator reached its `yield*` already cancelled, so the advertisement controller was never listened to, and the cleanup then awaited a `close()` that can never complete on such a controller: `stopScan` was never sent, `isScanning` stayed `true`, and every later scan failed with `operationInProgress` for the life of the process. A consumer awaiting the cancel — as a refresh that stops the previous scan first does — waited forever too.
-- (Darwin) `connect` now gives up at its `timeout` natively as well, instead of leaving the attempt outstanding until something cancels it.
-- Fixed one stuck platform call wedging every later one for the life of the process. The internal platform queue is held for the duration of a call, but a timeout was applied from outside it: the caller was handed a `timeout` error while the call itself stayed in flight, holding the queue with nothing left to release it. A connect to a device that had gone away — CoreBluetooth waits for such a peripheral indefinitely — was enough to take out scanning, connecting and every read for good, recoverable only by restarting the app. The timeout and the adapter-off guard now run inside the queue, so giving up on a call releases it and costs only that one operation. One consequence: an operation retried straight after timing out no longer waits for the abandoned one to finish natively but fails with `operationInProgress` until it has (bounded by the link supervision timeout), since neither platform can cancel an in-flight GATT operation.
-- Fixed `connect(timeout:)` never timing out. Its own cleanup — the `disconnect` that cancels the timed-out attempt — was an unbounded call queued behind the very connect it was canceling, so the future the caller was waiting on was never completed at all. The cleanup is now bounded, jumps the queue, and no longer runs while the global operation mutex is held.
-- Fixed `disconnect(queue: false)` not being able to cancel an in-progress connection attempt, which is what it is for. It skipped the operation queue but not the platform queue, so it could not reach the platform while the connect it was meant to cancel was still on it. It now also cancels a connect that is still queued and has not reached the platform at all, which the old global disconnect mutex could not express.
-- `adapterState` now means the same thing on every platform: `on`, or the most actionable blocker. Android reported the radio alone; it now reads `unauthorized` when the radio is on and the scan permission has been refused, as Darwin already did, pushed on refusal and on return to the foreground. A permission never asked for is not a blocker, so nothing prompts before the first scan would have.
-- Added `BluebirdErrorCode.locationDisabled`. Android 11 and below gate a BLE scan on the system location toggle and, with it off, return nothing and say nothing about why; `startScan` now fails with this instead.
-
-
+- Fixed connection and scan issues that could leave the plugin stuck.
+- `adapterState` reports a refused permission on every platform; a scan Android blocks on the location toggle fails with `locationDisabled`.
 
 ## 0.4.4
 

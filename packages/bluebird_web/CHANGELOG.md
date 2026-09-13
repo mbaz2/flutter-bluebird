@@ -1,5 +1,6 @@
-## Unreleased
-- `connect` accepts the caller's timeout and does nothing with it: Web Bluetooth cannot cancel a pending `connect()`, so the deadline stays with the Dart side.
+## 0.5.0
+
+- Updated for the new platform interface.
 
 ## 0.4.2
 

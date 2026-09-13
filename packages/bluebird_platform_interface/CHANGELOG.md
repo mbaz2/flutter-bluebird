@@ -1,8 +1,6 @@
-## Unreleased
+## 0.5.0
 
-- **Breaking for implementers:** `connect` takes the caller's `timeout` (`timeoutMs` on the wire). A platform whose connect never gives up on its own abandons the attempt at that deadline and fails with `timeout`; the Dart side applies the same deadline as a backstop, so the two never disagree on when a connect is over.
-- Added `BluebirdErrorCode.locationDisabled`, for a scan refused because the system location toggle is off (Android 11 and below).
-
+- Breaking: `connect` takes a timeout. Added `locationDisabled`.
 
 ## 0.4.0
 

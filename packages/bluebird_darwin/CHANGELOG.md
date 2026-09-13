@@ -1,5 +1,6 @@
-## Unreleased
-- `connect` now ends at the caller's timeout instead of never. CoreBluetooth never gives up on a connection attempt of its own accord, so a peripheral that is powered off or out of range left the call outstanding forever — and the device stuck in `connecting` with its slot occupied, which failed every later attempt with `operationInProgress`. At the deadline the connection is cancelled, the peripheral's state is torn down and the call fails with `timeout`, leaving the device retryable.
+## 0.5.0
+
+- Fixed connection attempts that never ended.
 
 ## 0.4.4
 
