@@ -321,7 +321,7 @@ class Bluebird {
     bool androidUsesFineLocation = false,
     List<Uuid> webOptionalServices = const [],
     Duration? timeout,
-  }) async* {
+  }) {
     assert(continuousDivisor >= 1, "divisor must be >= 1");
 
     // Note: `withKeywords` is not compatible with other filters on android
@@ -336,12 +336,6 @@ class Bluebird {
           withServiceData.isNotEmpty;
       assert(withKeywords.isEmpty || !hasOtherFilter, "withKeywords is not compatible with other filters on Android");
     }
-
-    // one scan at a time — claim synchronously so concurrent listens can't race
-    if (_isScanningNow) {
-      throw BluebirdException("scan", BluebirdErrorCode.operationInProgress, "a scan is already in progress");
-    }
-    _setScanning(true);
 
     final settings = BmScanSettings(
       withServices: withServices.map((s) => s.string).toList(),
@@ -358,82 +352,7 @@ class Bluebird {
       webOptionalServices: webOptionalServices.map((s) => s.string).toList(),
     );
 
-    // Buffer advertisements from *before* the native scan starts, so none are
-    // missed while startScan is in flight.
-    final controller = StreamController<ScanResult>();
-    // Guard against add-after-close: the controller can be closed (by a timeout
-    // or endScan()) before this subscription is cancelled in the finally.
-    final advertisements = extractEventStream<OnScanAdvertisementEvent>()
-        .map((e) => e.advertisement)
-        .listen(
-          (a) {
-            if (!controller.isClosed) controller.add(a);
-          },
-          onError: (Object e, StackTrace st) {
-            if (!controller.isClosed) controller.addError(e, st);
-          },
-        );
-
-    // Ways the scan ends without us telling the platform to stop, because the
-    // native scan is already dead: it reported a failure, the adapter turned
-    // off, or the engine detached (hot restart). In each case skip stopScan.
-    var nativeScanDead = false;
-    void endScan({Object? error}) {
-      if (controller.isClosed) return;
-      nativeScanDead = true;
-      if (error != null) controller.addError(error);
-      controller.close();
-    }
-
-    final failures = extractEventStream<OnScanFailedEvent>().listen(
-      (e) => endScan(error: BluebirdException("scan", BluebirdErrorCode.platform, "(${e.errorCode}) ${e.errorString}")),
-    );
-    // Every state a running scan cannot survive. `unauthorized` and `unavailable` belong
-    // here as much as `off` does: authorization can be revoked from the settings app
-    // mid-scan, and the adapter can disappear, and in both cases the native scan is dead
-    // while the stream would otherwise stay open forever waiting for advertisements that
-    // can never arrive. `unknown` is left out — it is the state before the adapter has
-    // reported itself, not one it falls back into.
-    const dead = {
-      BluetoothAdapterState.off,
-      BluetoothAdapterState.turningOff,
-      BluetoothAdapterState.unauthorized,
-      BluetoothAdapterState.unavailable,
-    };
-    final adapterOff = adapterState.changes.where(dead.contains).listen((_) => endScan());
-    final detached = extractEventStream<OnDetachedFromEngineEvent>().listen((_) => endScan());
-
-    Timer? timeoutTimer;
-    var started = false;
-    try {
-      await invoke("startScan", (p) => p.startScan(settings));
-      started = true;
-      // Stop the scan and complete the stream normally after [timeout]. Closing
-      // the controller (rather than endScan()) leaves nativeScanDead false, so
-      // the finally still tells the platform to stopScan.
-      if (timeout != null) {
-        timeoutTimer = Timer(timeout, () {
-          if (!controller.isClosed) controller.close();
-        });
-      }
-      yield* controller.stream;
-    } finally {
-      timeoutTimer?.cancel();
-      // not awaited: the consumer is gone, and if it cancelled before the
-      // yield* the controller was never listened to and close() never completes
-      if (!controller.isClosed) unawaited(controller.close());
-      await advertisements.cancel();
-      await failures.cancel();
-      await adapterOff.cancel();
-      await detached.cancel();
-      try {
-        // release the guard only after the native scan has actually stopped, so
-        // a new scan can't start before this one's stopScan lands
-        if (started && !nativeScanDead) await invoke("stopScan", (p) => p.stopScan());
-      } finally {
-        _setScanning(false);
-      }
-    }
+    return _ScanSession(settings, timeout).stream;
   }
 
   /// Sets the verbosity of the *native* platform logging (Android logcat / Apple
@@ -937,4 +856,96 @@ abstract final class AttError {
   static const int cccdImproperlyConfigured = 0xfd;
   static const int procedureAlreadyInProgress = 0xfe;
   static const int outOfRange = 0xff;
+}
+
+/// One scan, from first listen to cancel, timeout or failure. The native scan
+/// starts in [onListen] and stops in [onCancel], which also runs once the
+/// stream has ended, so every way out shares one teardown.
+class _ScanSession {
+  final BmScanSettings _settings;
+  final Duration? _timeout;
+
+  late final StreamController<ScanResult> _controller = StreamController(onListen: _start, onCancel: _stop);
+  final List<StreamSubscription> _subscriptions = [];
+  Timer? _timer;
+
+  /// Whether this session holds the one-scan-at-a-time guard.
+  bool _claimed = false;
+  Future<void>? _starting;
+  bool _started = false;
+
+  /// The native scan is already gone (it failed, the adapter went away, or the
+  /// engine detached), so there is nothing to stop.
+  bool _nativeScanDead = false;
+
+  _ScanSession(this._settings, this._timeout);
+
+  Stream<ScanResult> get stream => _controller.stream;
+
+  // Every state a running scan cannot survive. `unauthorized` and `unavailable` belong
+  // here as much as `off` does: authorization can be revoked from the settings app
+  // mid-scan, and the adapter can disappear, and in both cases the native scan is dead
+  // while the stream would otherwise stay open forever waiting for advertisements that
+  // can never arrive. `unknown` is left out — it is the state before the adapter has
+  // reported itself, not one it falls back into.
+  static const _dead = {
+    BluetoothAdapterState.off,
+    BluetoothAdapterState.turningOff,
+    BluetoothAdapterState.unauthorized,
+    BluetoothAdapterState.unavailable,
+  };
+
+  void _start() {
+    // one scan at a time — claimed at listen time, so concurrent listens can't race
+    if (Bluebird._isScanningNow) {
+      _end(error: BluebirdException("scan", BluebirdErrorCode.operationInProgress, "a scan is already in progress"));
+      return;
+    }
+    _claimed = true;
+    Bluebird._setScanning(true);
+
+    _subscriptions.addAll([
+      Bluebird.extractEventStream<OnScanAdvertisementEvent>().listen((e) {
+        if (!_controller.isClosed) _controller.add(e.advertisement);
+      }),
+      Bluebird.extractEventStream<OnScanFailedEvent>().listen(
+        (e) => _end(error: BluebirdException("scan", BluebirdErrorCode.platform, "(${e.errorCode}) ${e.errorString}")),
+      ),
+      Bluebird.adapterState.changes.where(_dead.contains).listen((_) => _end()),
+      Bluebird.extractEventStream<OnDetachedFromEngineEvent>().listen((_) => _end()),
+    ]);
+
+    _starting = Bluebird.invoke("startScan", (p) => p.startScan(_settings)).then((_) {
+      _started = true;
+      // closing (rather than _end) leaves _nativeScanDead false, so _stop
+      // still tells the platform to stopScan
+      if (_timeout != null) _timer = Timer(_timeout, () => _controller.close());
+    }, onError: (Object e) => _end(error: e));
+  }
+
+  void _end({Object? error}) {
+    if (_controller.isClosed) return;
+    _nativeScanDead = true;
+    if (error != null) _controller.addError(error);
+    _controller.close();
+  }
+
+  Future<void> _stop() async {
+    _timer?.cancel();
+    for (final subscription in _subscriptions) {
+      await subscription.cancel();
+    }
+    if (!_claimed) return;
+
+    // a cancel that lands while startScan is in flight still has a native
+    // scan to stop once it starts
+    await _starting;
+    try {
+      // release the guard only after the native scan has actually stopped, so
+      // a new scan can't start before this one's stopScan lands
+      if (_started && !_nativeScanDead) await Bluebird.invoke("stopScan", (p) => p.stopScan());
+    } finally {
+      Bluebird._setScanning(false);
+    }
+  }
 }
