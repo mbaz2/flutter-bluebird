@@ -1,6 +1,6 @@
 ## Unreleased
 
-- Fixed a manufacturer data scan filter with no `data` matching every advertisement. The filter's data reaches the platform as null when it is empty, and Android drops the company id from a `ScanFilter` whose manufacturer data is null, so `withMsd: [MsdFilter(id)]` filtered nothing. It is now sent as an empty array, which still requires the company id, as on Darwin. Besides the traffic, an unfiltered scan is one Android is free to throttle: on a Samsung Galaxy S10+ it was downgraded after about five minutes and stopped reporting almost everything while still running.
+- Fixed a manufacturer data scan filter with no `data` matching every advertisement.
 
 ## 0.5.0
 
